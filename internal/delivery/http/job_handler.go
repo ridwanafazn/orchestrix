@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -16,17 +17,18 @@ func NewJobHandler(ju usecase.JobUsecase) *JobHandler {
 }
 
 func (h *JobHandler) HandleUpload(c *gin.Context) {
-	// Simulasi UserID (Nanti ini diganti dengan ekstraksi dari JWT Token)
-	userID := c.DefaultPostForm("user_id", "guest-12345")
+	userID := c.MustGet("user_id").(string)
 
-	// Ambil file dari request multipart
+	// PENYUNTIKAN SKENARIO: Menerima sinyal simulasi dari Frontend via Query Param
+	chaosInject := c.Query("force_error") == "true"
+	heavyCompute := c.Query("heavy") == "true"
+
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "File is required"})
 		return
 	}
 
-	// Buka file
 	file, err := fileHeader.Open()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file"})
@@ -34,19 +36,31 @@ func (h *JobHandler) HandleUpload(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Eksekusi Usecase
 	contentType := fileHeader.Header.Get("Content-Type")
-	job, err := h.jobUsecase.ProcessKYCUpload(c.Request.Context(), userID, fileHeader.Filename, file, contentType)
+
+	// Suntikkan kedua flag ke dalam context
+	ctx := context.WithValue(c.Request.Context(), "chaos_inject", chaosInject)
+	ctx = context.WithValue(ctx, "heavy_compute", heavyCompute)
+
+	job, err := h.jobUsecase.ProcessKYCUpload(ctx, userID, fileHeader.Filename, file, contentType)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 202 Accepted: Diterima untuk diproses (Asynchronous)
-	c.JSON(http.StatusAccepted, gin.H{
+	response := gin.H{
 		"message": "Upload accepted. Job is currently being processed.",
 		"job_id":  job.ID,
 		"status":  job.Status,
-	})
+	}
+
+	if chaosInject {
+		response["warning"] = "Chaos Engineering Triggered. Node failure expected."
+	}
+	if heavyCompute {
+		response["info"] = "Heavy Computation Triggered. Processing will take longer."
+	}
+
+	c.JSON(http.StatusAccepted, response)
 }

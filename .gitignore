@@ -9,6 +9,7 @@ bin/
 *.test
 *.out
 coverage.*
+.gocache/
 
 # Runtime storage
 storage/minio_data/
@@ -18,3 +19,4 @@ storage/temp/
 *.log
 .DS_Store
 Thumbs.db
+data

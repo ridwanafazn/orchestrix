@@ -43,32 +43,41 @@ func (u *jobUsecase) ProcessKYCUpload(ctx context.Context, userID string, fileNa
 	}
 
 	// 2. Upload file fisik ke MinIO/R2
-	// Tambahkan prefix timestamp agar nama file unik
 	uniqueFileName := fmt.Sprintf("%d_%s", time.Now().Unix(), fileName)
 	fileURL, err := u.storageRepo.UploadFile(ctx, uniqueFileName, file, contentType)
 	if err != nil {
-		// Jika upload gagal, set status ke FAILED
 		job.Status = domain.StatusFailed
 		job.ErrorLog = err.Error()
 		_ = u.jobRepo.Update(ctx, job)
 		return nil, fmt.Errorf("failed to upload file: %w", err)
 	}
 
-	// Update DB dengan URL file
 	job.ResultURL = fileURL
 	if err := u.jobRepo.Update(ctx, job); err != nil {
 		return nil, fmt.Errorf("failed to update job with url: %w", err)
 	}
 
-	// 3. Publish Event ke RabbitMQ (Worker akan memprosesnya nanti)
-	eventPayload := map[string]string{
-		"job_id": job.ID,
-		"type":   job.Type,
+	// Tangkap flag dari Context
+	chaosInject := false
+	if val := ctx.Value("chaos_inject"); val != nil {
+		chaosInject = val.(bool)
+	}
+
+	heavyCompute := false
+	if val := ctx.Value("heavy_compute"); val != nil {
+		heavyCompute = val.(bool)
+	}
+
+	// 3. Publish Event ke RabbitMQ
+	eventPayload := map[string]interface{}{
+		"job_id":        job.ID,
+		"type":          job.Type,
+		"chaos_inject":  chaosInject,
+		"heavy_compute": heavyCompute,
 	}
 	payloadBytes, _ := json.Marshal(eventPayload)
 
 	if err := u.rmqClient.Publish("kyc_queue", payloadBytes); err != nil {
-		// Toleransi kegagalan: Catat error tapi jangan gagalkan request ke user
 		job.ErrorLog = "Failed to publish to message broker"
 		_ = u.jobRepo.Update(ctx, job)
 	}

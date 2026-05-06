@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -12,14 +13,19 @@ import (
 
 type StorageRepository interface {
 	UploadFile(ctx context.Context, fileName string, fileContent io.Reader, contentType string) (string, error)
+	GetPresignedURL(ctx context.Context, fileName string) (string, error) // Endpoint baru
 }
 
 type storageRepo struct {
-	s3Client *storage.S3Client
+	s3Client      *storage.S3Client
+	presignClient *s3.PresignClient // Dibutuhkan untuk membuat Presigned URL
 }
 
-func NewStorageRepository(s3 *storage.S3Client) StorageRepository {
-	return &storageRepo{s3Client: s3}
+func NewStorageRepository(s3Config *storage.S3Client) StorageRepository {
+	return &storageRepo{
+		s3Client:      s3Config,
+		presignClient: s3.NewPresignClient(s3Config.Client),
+	}
 }
 
 func (r *storageRepo) UploadFile(ctx context.Context, fileName string, fileContent io.Reader, contentType string) (string, error) {
@@ -34,8 +40,20 @@ func (r *storageRepo) UploadFile(ctx context.Context, fileName string, fileConte
 		return "", fmt.Errorf("failed to upload to s3: %w", err)
 	}
 
-	// Konstruksi URL (Untuk Lokal MinIO)
-	// Jika di Produksi (R2), biasanya menggunakan public domain/worker URL
-	fileURL := fmt.Sprintf("%s/%s/%s", r.s3Client.Endpoint, r.s3Client.Bucket, fileName)
-	return fileURL, nil
+	// Kita HANYA mengembalikan object key/path yang aman, bukan URL publik.
+	return fileName, nil
+}
+
+// FUNGSI BARU: Enterprise Security Level (Temporary Access)
+func (r *storageRepo) GetPresignedURL(ctx context.Context, fileName string) (string, error) {
+	req, err := r.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(r.s3Client.Bucket),
+		Key:    aws.String(fileName),
+	}, s3.WithPresignExpires(15*time.Minute)) // URL kedaluwarsa dalam 15 menit
+
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+
+	return req.URL, nil
 }

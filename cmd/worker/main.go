@@ -18,7 +18,7 @@ import (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  No .env file found")
+		log.Println("⚠️  No .env file found, using system environment variables")
 	}
 
 	// 1. Init Infra
@@ -36,29 +36,24 @@ func main() {
 		log.Fatalf("❌ Gagal listen ke RabbitMQ: %v", err)
 	}
 
-	// Channel sebagai penahan agar CLI tidak exit
 	forever := make(chan struct{})
 
-	log.Println("👷 Worker Node Online! Menunggu antrean pekerjaan...")
+	log.Println("👷 Worker Node Online! Menunggu antrean pekerjaan dari kyc_queue...")
 
 	// 4. Goroutine Pool Listener
 	go func() {
 		for msg := range msgs {
 			// Spawn goroutine baru untuk setiap pesan agar berjalan paralel
-			// secara non-blocking, namun tetap dibatasi oleh Prefetch=10.
 			go func(delivery amqp.Delivery) {
 				ctx := context.Background()
 
 				err := workerUsecase.ProcessJob(ctx, delivery.Body)
 				if err != nil {
-					log.Printf("❌ Error processing job: %v", err)
-					// Reject (Nack). Argumen (multiple: false, requeue: false).
-					// Karena requeue=false, pesan ini akan dibuang (atau masuk Dead Letter Exchange jika disetup)
+					log.Printf("💥 Error processing job (Routing to DLX): %v", err)
+					// WAJIB requeue=false agar RabbitMQ melemparnya ke Dead Letter Exchange
 					delivery.Nack(false, false)
 				} else {
-					// Manual Ack: Mengabari RabbitMQ bahwa tugas aman diselesaikan,
-					// hapus permanen dari antrean.
-					delivery.Ack(false)
+					delivery.Ack(false) // Sukses, hapus permanen dari antrean
 				}
 			}(msg)
 		}

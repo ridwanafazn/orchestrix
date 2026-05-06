@@ -22,7 +22,13 @@ func InitRabbitMQ(url string) *RabbitMQClient {
 		log.Fatalf("❌ Gagal membuka channel RabbitMQ: %v", err)
 	}
 
-	log.Println("✅ RabbitMQ Connected")
+	// Setup Dead Letter Exchange (DLX) secara global saat inisiasi
+	err = ch.ExchangeDeclare("dlx_exchange", "direct", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("❌ Gagal membuat DLX: %v", err)
+	}
+
+	log.Println("✅ RabbitMQ Connected (with DLX ready)")
 
 	return &RabbitMQClient{
 		Conn:    conn,
@@ -30,15 +36,21 @@ func InitRabbitMQ(url string) *RabbitMQClient {
 	}
 }
 
-// Publish mengirim pesan ke antrean yang spesifik
 func (r *RabbitMQClient) Publish(queueName string, payload []byte) error {
+	// Menambahkan argumen DLX agar jika terjadi reject/failure,
+	// pesan dilempar ke dlx_exchange
+	args := amqp.Table{
+		"x-dead-letter-exchange":    "dlx_exchange",
+		"x-dead-letter-routing-key": "dead_" + queueName,
+	}
+
 	_, err := r.Channel.QueueDeclare(
 		queueName,
 		true,  // durable
 		false, // auto-delete
 		false, // exclusive
 		false, // no-wait
-		nil,   // arguments
+		args,  // IMPLEMENTASI DLX
 	)
 	if err != nil {
 		return err
@@ -58,27 +70,25 @@ func (r *RabbitMQClient) Publish(queueName string, payload []byte) error {
 	return err
 }
 
-// Consume menarik pesan dari antrean secara terus-menerus
 func (r *RabbitMQClient) Consume(queueName string, prefetchCount int) (<-chan amqp.Delivery, error) {
+	args := amqp.Table{
+		"x-dead-letter-exchange":    "dlx_exchange",
+		"x-dead-letter-routing-key": "dead_" + queueName,
+	}
+
 	_, err := r.Channel.QueueDeclare(
 		queueName,
 		true,
 		false,
 		false,
 		false,
-		nil,
+		args, // BINDING DLX DI KONSUMEN JUGA
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	// QoS membatasi pesan yang ditarik Worker agar CPU tidak hang.
-	// Jika diset 10, worker maksimal hanya memegang 10 pekerjaan bersamaan.
-	err = r.Channel.Qos(
-		prefetchCount,
-		0,     // prefetch size
-		false, // global
-	)
+	err = r.Channel.Qos(prefetchCount, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +96,7 @@ func (r *RabbitMQClient) Consume(queueName string, prefetchCount int) (<-chan am
 	return r.Channel.Consume(
 		queueName,
 		"",    // consumer tag
-		false, // auto-ack: FALSE! Kita pakai manual Ack di Usecase
+		false, // auto-ack: FALSE!
 		false, // exclusive
 		false, // no-local
 		false, // no-wait

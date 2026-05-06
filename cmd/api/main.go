@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -70,8 +71,19 @@ func main() {
 
 		log.Println("📡 Notification Gateway Listening...")
 		for msg := range msgs {
-			// Lempar payload RabbitMQ langsung ke semua klien WS
-			hub.Broadcast <- msg.Body
+			// OPTIMASI: Ekstrak UserID sekali saja di sini, lalu kirim struct WsMessage ke Hub
+			var payload struct {
+				UserID string `json:"user_id"`
+			}
+
+			if err := json.Unmarshal(msg.Body, &payload); err == nil && payload.UserID != "" {
+				hub.Broadcast <- ws.WsMessage{
+					UserID:  payload.UserID,
+					Payload: msg.Body, // Payload utuh diteruskan ke klien
+				}
+			} else {
+				log.Println("⚠️ API Gateway Error: Payload RabbitMQ cacat atau tanpa user_id")
+			}
 			msg.Ack(false)
 		}
 	}()

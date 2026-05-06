@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -20,13 +19,17 @@ var upgrader = websocket.Upgrader{
 func ServeWS(hub *Hub, c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Println("Failed to upgrade WS:", err)
 		return
 	}
-	client := &Client{Hub: hub, Conn: conn, Send: make(chan []byte, 256)}
-	client.Hub.Register <- client
 
-	// Mengizinkan koleksi memori berjalan di background
+	// Ambil userID dari JWT middleware
+	userID := c.MustGet("user_id").(string)
+
+	client := &Client{Hub: hub, Conn: conn, Send: make(chan []byte, 256)}
+
+	// Kirim menggunakan struct wrapper baru
+	client.Hub.Register <- ClientRegister{Client: client, UserID: userID}
+
 	go client.WritePump()
 	go client.ReadPump()
 }
